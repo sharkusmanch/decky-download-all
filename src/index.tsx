@@ -85,9 +85,13 @@ const initPluginRuntime = (): void => {
     reactiveTick();
   });
 
+  let lastPausedLogged: boolean | null = null;
   overviewSubscription = SteamClient.Downloads.RegisterForDownloadOverview((overview: any) => {
     const paused = !!overview?.paused;
-    logger.info(`Download overview: paused=${paused}`);
+    if (paused !== lastPausedLogged) {
+      logger.info(`Download overview: paused=${paused}`);
+      lastPausedLogged = paused;
+    }
     setDownloadsPaused(paused);
   });
 
