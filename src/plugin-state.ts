@@ -15,6 +15,7 @@ export interface LastAutoRun {
 let currentDownloads: DownloadItem[] = [];
 let apiFormat: DownloadAPIFormat = DownloadAPIFormat.Legacy;
 let lastAutoRun: LastAutoRun | null = null;
+let downloadsPaused = false;
 
 const subscribers = new Set<() => void>();
 const notify = () => subscribers.forEach((fn) => fn());
@@ -22,6 +23,7 @@ const notify = () => subscribers.forEach((fn) => fn());
 export const getCurrentDownloads = (): DownloadItem[] => currentDownloads;
 export const getAPIFormat = (): DownloadAPIFormat => apiFormat;
 export const getLastAutoRun = (): LastAutoRun | null => lastAutoRun;
+export const getDownloadsPaused = (): boolean => downloadsPaused;
 
 export const setCurrentDownloads = (items: DownloadItem[]): void => {
   currentDownloads = items;
@@ -37,10 +39,17 @@ export const setLastAutoRun = (run: LastAutoRun): void => {
   notify();
 };
 
+export const setDownloadsPaused = (paused: boolean): void => {
+  if (downloadsPaused === paused) return;
+  downloadsPaused = paused;
+  notify();
+};
+
 // React hook: re-renders the caller whenever module state changes.
 export const useSharedState = (): {
   downloads: DownloadItem[];
   lastAutoRun: LastAutoRun | null;
+  downloadsPaused: boolean;
 } => {
   const [, forceRender] = useState(0);
   useEffect(() => {
@@ -50,5 +59,5 @@ export const useSharedState = (): {
       subscribers.delete(cb);
     };
   }, []);
-  return { downloads: currentDownloads, lastAutoRun };
+  return { downloads: currentDownloads, lastAutoRun, downloadsPaused };
 };

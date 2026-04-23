@@ -27,10 +27,11 @@ import {
 import {
   setAPIFormat,
   setCurrentDownloads,
+  setDownloadsPaused,
   getAPIFormat,
   useSharedState,
 } from "./plugin-state";
-import { autoRunTick } from "./auto-run";
+import { autoRunTick, recordUserDequeues } from "./auto-run";
 import { trailingDebounce } from "./debounce";
 
 declare const SteamClient: any;
@@ -44,8 +45,13 @@ const REACTIVE_DEBOUNCE_MS = 1000;
 const reactiveTick = trailingDebounce(() => autoRunTick("reactive"), REACTIVE_DEBOUNCE_MS);
 const settingsTick = trailingDebounce(() => autoRunTick("settings"), REACTIVE_DEBOUNCE_MS);
 
-let subscription: { unregister: () => void } | null = null;
+let itemsSubscription: { unregister: () => void } | null = null;
+let overviewSubscription: { unregister: () => void } | null = null;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
+
+// Previous pending-items snapshot, used to detect user-initiated dequeues
+// (queue_index >= 0 -> -1 transitions we didn't cause).
+let previousPending: import("./download-selection").DownloadItem[] | null = null;
 
 const initPluginRuntime = (): void => {
   const s = loadSettings();
@@ -54,7 +60,7 @@ const initPluginRuntime = (): void => {
       `maxSizeMB=${s.autoMaxSizeMB}, interval=${FALLBACK_INTERVAL_MS / 60000}min`,
   );
 
-  subscription = SteamClient.Downloads.RegisterForDownloadItems((...args: any[]) => {
+  itemsSubscription = SteamClient.Downloads.RegisterForDownloadItems((...args: any[]) => {
     const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
     const format = detectAPIFormat(arr);
     setAPIFormat(format);
@@ -73,22 +79,33 @@ const initPluginRuntime = (): void => {
         `(${items.length - pending.length} completed, ${unqueued} unqueued, ${queued} queued, ` +
         `${active} active, ${paused} paused) ${headDesc}`,
     );
+    recordUserDequeues(previousPending, pending);
+    previousPending = pending;
     setCurrentDownloads(pending);
     reactiveTick();
+  });
+
+  overviewSubscription = SteamClient.Downloads.RegisterForDownloadOverview((overview: any) => {
+    const paused = !!overview?.paused;
+    logger.info(`Download overview: paused=${paused}`);
+    setDownloadsPaused(paused);
   });
 
   intervalHandle = setInterval(() => autoRunTick("interval"), FALLBACK_INTERVAL_MS);
 };
 
 const teardownPluginRuntime = (): void => {
-  subscription?.unregister();
-  subscription = null;
+  itemsSubscription?.unregister();
+  itemsSubscription = null;
+  overviewSubscription?.unregister();
+  overviewSubscription = null;
   if (intervalHandle !== null) {
     clearInterval(intervalHandle);
     intervalHandle = null;
   }
   reactiveTick.cancel();
   settingsTick.cancel();
+  previousPending = null;
 };
 
 const AUTO_SETTING_KEYS = new Set(["autoEnabled", "autoMode", "autoMaxSizeMB"]);

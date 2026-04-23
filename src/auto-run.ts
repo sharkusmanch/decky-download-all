@@ -4,11 +4,13 @@ import {
   isStalledHead,
   isUnqueued,
   sortBySize,
+  type DownloadItem,
 } from "./download-selection";
 import { queueItems, resumeAppUpdate } from "./queue";
 import {
   getCurrentDownloads,
   getAPIFormat,
+  getDownloadsPaused,
   setLastAutoRun,
 } from "./plugin-state";
 import { loadSettings } from "./settings";
@@ -21,15 +23,42 @@ export type AutoRunTrigger = "reactive" | "interval" | "settings";
 // disappear from Steam's list (completed, cancelled, uninstalled).
 const actedAppids = new Set<number>();
 
+// Appids the user explicitly unqueued (queue_index went from >=0 to -1 without
+// us initiating it). Track A skips these so we don't undo the user's action.
+// Pruned on disappearance — a fresh re-install of the same game can be auto-queued.
+const userDequeuedAppids = new Set<number>();
+
 const pruneActedAppids = (visibleAppids: Set<number>): void => {
   for (const id of actedAppids) {
     if (!visibleAppids.has(id)) actedAppids.delete(id);
+  }
+  for (const id of userDequeuedAppids) {
+    if (!visibleAppids.has(id)) userDequeuedAppids.delete(id);
+  }
+};
+
+// Called by the download-items subscription with the previous and current
+// snapshots. Any appid that went from queued (queue_index >= 0) to unqueued
+// (queue_index === -1) without our doing is attributed to the user and added
+// to `userDequeuedAppids`.
+export const recordUserDequeues = (
+  previous: DownloadItem[] | null,
+  current: DownloadItem[],
+): void => {
+  if (!previous) return;
+  const prevByAppid = new Map(previous.map((d) => [d.appid, d]));
+  for (const cur of current) {
+    const prev = prevByAppid.get(cur.appid);
+    if (prev && prev.queue_index >= 0 && cur.queue_index === -1) {
+      userDequeuedAppids.add(cur.appid);
+    }
   }
 };
 
 export const autoRunTick = (trigger: AutoRunTrigger): void => {
   const settings = loadSettings();
   if (!settings.autoEnabled) return;
+  if (getDownloadsPaused()) return;
 
   const downloads = getCurrentDownloads();
   const format = getAPIFormat();
@@ -40,7 +69,7 @@ export const autoRunTick = (trigger: AutoRunTrigger): void => {
   // Track A: queue new eligible items.
   const unqueued = downloads.filter(isUnqueued);
   const eligible = filterByMode(unqueued, settings.autoMode, settings.autoMaxSizeMB).filter(
-    (d) => !actedAppids.has(d.appid),
+    (d) => !actedAppids.has(d.appid) && !userDequeuedAppids.has(d.appid),
   );
 
   let trackAFired = false;
