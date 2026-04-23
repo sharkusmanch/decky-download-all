@@ -14,7 +14,7 @@ import {
 import { loadSettings } from "./settings";
 import { logger } from "./logger";
 
-export type AutoRunTrigger = "reactive" | "interval";
+export type AutoRunTrigger = "reactive" | "interval" | "settings";
 
 // Appids that autoRunTick has moved from unqueued -> queued in this plugin session.
 // Prevents re-queuing while items remain visible to Steam. Pruned when items

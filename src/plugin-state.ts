@@ -4,7 +4,7 @@ import { DownloadAPIFormat } from "./queue";
 
 export interface LastAutoRun {
   time: number; // Date.now() timestamp of the run
-  trigger: "reactive" | "interval";
+  trigger: "reactive" | "interval" | "settings";
   action: "queued" | "resumed";
   count: number; // number of items queued (0 for "resumed")
 }

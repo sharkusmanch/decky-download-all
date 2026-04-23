@@ -42,6 +42,7 @@ const REACTIVE_DEBOUNCE_MS = 1000;
 // ----- Module-scope runtime: subscription + interval, started once at plugin load.
 
 const reactiveTick = trailingDebounce(() => autoRunTick("reactive"), REACTIVE_DEBOUNCE_MS);
+const settingsTick = trailingDebounce(() => autoRunTick("settings"), REACTIVE_DEBOUNCE_MS);
 
 let subscription: { unregister: () => void } | null = null;
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -77,7 +78,12 @@ const teardownPluginRuntime = (): void => {
     intervalHandle = null;
   }
   reactiveTick.cancel();
+  settingsTick.cancel();
 };
+
+const AUTO_SETTING_KEYS = new Set(["autoEnabled", "autoMode", "autoMaxSizeMB"]);
+const affectsAutoRun = (partial: Partial<Settings>): boolean =>
+  Object.keys(partial).some((k) => AUTO_SETTING_KEYS.has(k));
 
 // ----- React panel view.
 
@@ -92,6 +98,7 @@ const PluginContent: FC = () => {
     for (const [k, v] of Object.entries(partial)) {
       logger.info(`Auto mode setting changed: ${k}=${v}`);
     }
+    if (affectsAutoRun(partial)) settingsTick();
   };
 
   const handleDownloadAll = () => {
