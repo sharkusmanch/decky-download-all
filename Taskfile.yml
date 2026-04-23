@@ -1,0 +1,99 @@
+version: "3"
+
+vars:
+  PLUGIN_NAME: decky-download-all
+  DECKY_PLUGINS_DIR: "{{.HOME}}/homebrew/plugins"
+  INSTALL_LINK: "{{.HOME}}/homebrew/plugins/{{.PLUGIN_NAME}}"
+  LOG_DIR: "{{.HOME}}/homebrew/logs/{{.PLUGIN_NAME}}"
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  deps:
+    desc: Install Node dependencies with pnpm
+    cmds:
+      - pnpm install
+
+  build:
+    desc: Build dist/index.js via Rollup
+    sources:
+      - src/**/*.ts
+      - src/**/*.tsx
+      - rollup.config.js
+      - tsconfig.json
+      - package.json
+    generates:
+      - dist/index.js
+    cmds:
+      - pnpm run build
+
+  watch:
+    desc: Rebuild on source changes (dev loop)
+    cmds:
+      - pnpm run watch
+
+  clean:
+    desc: Remove dist/
+    cmds:
+      - rm -rf dist
+
+  install:
+    desc: Symlink this repo into Decky's plugins dir (requires sudo)
+    deps: [build]
+    cmds:
+      - sudo rm -rf {{.INSTALL_LINK}}
+      - sudo ln -s {{.ROOT_DIR}} {{.INSTALL_LINK}}
+      - echo "Symlinked {{.ROOT_DIR}} -> {{.INSTALL_LINK}}"
+      - echo "Run 'task reload' to make Decky pick up the change."
+
+  uninstall:
+    desc: Remove the plugin symlink (requires sudo)
+    cmds:
+      - sudo rm -f {{.INSTALL_LINK}}
+      - echo "Removed {{.INSTALL_LINK}}"
+
+  reload:
+    desc: Restart the Decky Loader service (requires sudo)
+    cmds:
+      - sudo systemctl restart plugin_loader
+      - echo "plugin_loader restarted. Give it a few seconds to come back up."
+
+  dev:
+    desc: Build, install (symlink), and reload Decky in one step
+    cmds:
+      - task: build
+      - task: install
+      - task: reload
+
+  logs:
+    desc: Tail the plugin log
+    cmds:
+      - |
+        if [ ! -d "{{.LOG_DIR}}" ]; then
+          echo "Log dir {{.LOG_DIR}} does not exist yet. Install + reload the plugin first." >&2
+          exit 1
+        fi
+        # Follow the newest .log file under the plugin log dir.
+        latest=$(ls -t {{.LOG_DIR}}/*.log 2>/dev/null | head -n 1)
+        if [ -z "$latest" ]; then
+          echo "No .log files in {{.LOG_DIR}} yet." >&2
+          exit 1
+        fi
+        echo "Tailing $latest (Ctrl-C to stop)"
+        tail -n 200 -f "$latest"
+
+  status:
+    desc: Show install link target and Decky Loader service state
+    cmds:
+      - |
+        if [ -L "{{.INSTALL_LINK}}" ]; then
+          echo "Link: {{.INSTALL_LINK}} -> $(readlink {{.INSTALL_LINK}})"
+        elif [ -e "{{.INSTALL_LINK}}" ]; then
+          echo "Path exists but is not a symlink: {{.INSTALL_LINK}}"
+        else
+          echo "Not installed (no {{.INSTALL_LINK}})."
+        fi
+      - systemctl is-active plugin_loader || true
