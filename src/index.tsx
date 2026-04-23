@@ -17,13 +17,15 @@ import {
   type Mode,
 } from "./download-selection";
 import { loadSettings, saveSettings, type Settings } from "./settings";
+import {
+  DownloadAPIFormat,
+  detectAPIFormat,
+  extractItems,
+  queueItems,
+  resumeAppUpdate,
+} from "./queue";
 // Set to true to show debug info in the UI
 const DEBUG = false;
-
-enum DownloadAPIFormat {
-  Legacy,      // pre-SteamOS 3.8: callback is (unknown, DownloadItem[]), queue methods take only appid
-  SteamOS38,  // SteamOS 3.8+: callback is (bIsInitial, { remote_client_id, item_data }[]), queue methods take appid + remote_client_id
-}
 
 // Shared state
 let currentSettings = loadSettings();
@@ -47,17 +49,8 @@ const PluginContent: FC = () => {
       // Old Steam format: (bIsInitial: boolean, items: DownloadItem[])
       // Somewhat brittle split, but differentiate by checking if the array elements have the item_data property.
       const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
-      let items: DownloadItem[];
-      if (arr.length > 0 && arr[0].item_data !== undefined) {
-        // SteamOS 3.8+ format: only include the local machine (remote_client_id "0")
-        apiFormat.current = DownloadAPIFormat.SteamOS38;
-        const localEntry = arr.find((entry: any) => entry.remote_client_id === "0");
-        items = localEntry ? (localEntry.item_data as DownloadItem[]) : [];
-      } else {
-        // Legacy format: arr is already DownloadItem[]
-        apiFormat.current = DownloadAPIFormat.Legacy;
-        items = arr as DownloadItem[];
-      }
+      apiFormat.current = detectAPIFormat(arr);
+      const items = extractItems(arr, apiFormat.current);
       const pending = items.filter((d) => !d.completed);
       logger.info(`Downloads updated: ${items.length} total, ${pending.length} pending (${items.length - pending.length} completed)`);
       setDownloads(pending);
@@ -84,29 +77,9 @@ const PluginContent: FC = () => {
     // Find the end of the current queue
     const maxQueueIndex = Math.max(...downloads.map((d) => d.queue_index), -1);
 
-    // SteamOS 3.8+ queue methods take a remote_client_id as second arg ("0" = local machine).
-    // Pre-3.8 methods take only the appid. Cast to any since the lib types are outdated.
-    const dl = SteamClient.Downloads as any;
-    logger.info(`QueueAppUpdate.length=${dl.QueueAppUpdate?.length}, SetQueueIndex.length=${dl.SetQueueIndex?.length}, ResumeAppUpdate.length=${dl.ResumeAppUpdate?.length}`);
-
-    // Add items to queue, then position them (smallest first at end of existing queue)
-    for (let i = 0; i < sorted.length; i++) {
-      if (apiFormat.current === DownloadAPIFormat.SteamOS38) {
-        dl.QueueAppUpdate(sorted[i].appid, "0");
-        dl.SetQueueIndex(sorted[i].appid, maxQueueIndex + 1 + i, "0");
-      } else {
-        dl.QueueAppUpdate(sorted[i].appid);
-        dl.SetQueueIndex(sorted[i].appid, maxQueueIndex + 1 + i);
-      }
-    }
-
-    // Resume downloading if paused
+    queueItems(sorted, maxQueueIndex, apiFormat.current);
     const resumeAppId = downloads.find((d) => d.queue_index === 0)?.appid ?? sorted[0].appid;
-    if (apiFormat.current === DownloadAPIFormat.SteamOS38) {
-      dl.ResumeAppUpdate(resumeAppId, "0");
-    } else {
-      dl.ResumeAppUpdate(resumeAppId);
-    }
+    resumeAppUpdate(resumeAppId, apiFormat.current);
 
     toaster.toast({
       title: "Download All",
