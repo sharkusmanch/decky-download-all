@@ -4,83 +4,123 @@ import {
   PanelSection,
   PanelSectionRow,
   SliderField,
+  ToggleField,
 } from "@decky/ui";
-import { useState, useEffect, useRef, FC } from "react";
+import { FC, useState } from "react";
 import { FaDownload, FaCheck } from "react-icons/fa";
+
 import { logger } from "./logger";
 import {
+  filterByMode,
   getTotalBytes,
   isUnqueued,
-  filterByMode,
   sortBySize,
   type DownloadItem,
   type Mode,
 } from "./download-selection";
 import { loadSettings, saveSettings, type Settings } from "./settings";
 import {
-  DownloadAPIFormat,
   detectAPIFormat,
   extractItems,
   queueItems,
   resumeAppUpdate,
 } from "./queue";
-// Set to true to show debug info in the UI
+import {
+  setAPIFormat,
+  setCurrentDownloads,
+  getAPIFormat,
+  useSharedState,
+} from "./plugin-state";
+import { autoRunTick } from "./auto-run";
+import { trailingDebounce } from "./debounce";
+
+declare const SteamClient: any;
+
 const DEBUG = false;
+const FALLBACK_INTERVAL_MS = 15 * 60 * 1000;
+const REACTIVE_DEBOUNCE_MS = 1000;
 
-// Shared state
-let currentSettings = loadSettings();
+// ----- Module-scope runtime: subscription + interval, started once at plugin load.
 
-// Main plugin UI in Quick Access Menu
+const reactiveTick = trailingDebounce(() => autoRunTick("reactive"), REACTIVE_DEBOUNCE_MS);
+
+let subscription: { unregister: () => void } | null = null;
+let intervalHandle: ReturnType<typeof setInterval> | null = null;
+
+const initPluginRuntime = (): void => {
+  const s = loadSettings();
+  logger.info(
+    `Auto mode initialized: enabled=${s.autoEnabled}, mode=${s.autoMode}, ` +
+      `maxSizeMB=${s.autoMaxSizeMB}, interval=${FALLBACK_INTERVAL_MS / 60000}min`,
+  );
+
+  subscription = SteamClient.Downloads.RegisterForDownloadItems((...args: any[]) => {
+    const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
+    const format = detectAPIFormat(arr);
+    setAPIFormat(format);
+    const items = extractItems(arr, format);
+    const pending = items.filter((d) => !d.completed);
+    logger.info(
+      `Downloads updated: ${items.length} total, ${pending.length} pending (${items.length - pending.length} completed)`,
+    );
+    setCurrentDownloads(pending);
+    reactiveTick();
+  });
+
+  intervalHandle = setInterval(() => autoRunTick("interval"), FALLBACK_INTERVAL_MS);
+};
+
+const teardownPluginRuntime = (): void => {
+  subscription?.unregister();
+  subscription = null;
+  if (intervalHandle !== null) {
+    clearInterval(intervalHandle);
+    intervalHandle = null;
+  }
+  reactiveTick.cancel();
+};
+
+// ----- React panel view.
+
 const PluginContent: FC = () => {
-  const [settings, setSettings] = useState(currentSettings);
-  const [downloads, setDownloads] = useState<DownloadItem[]>([]);
-  const apiFormat = useRef(DownloadAPIFormat.Legacy);
+  const { downloads, lastAutoRun } = useSharedState();
+  const [settings, setSettings] = useState<Settings>(() => loadSettings());
 
   const update = (partial: Partial<Settings>) => {
-    const newSettings = { ...settings, ...partial };
-    setSettings(newSettings);
-    currentSettings = newSettings;
-    saveSettings(newSettings);
+    const next = { ...settings, ...partial };
+    setSettings(next);
+    saveSettings(next);
+    for (const [k, v] of Object.entries(partial)) {
+      logger.info(`Auto mode setting changed: ${k}=${v}`);
+    }
   };
 
-  useEffect(() => {
-    const reg = SteamClient.Downloads.RegisterForDownloadItems((...args: any[]) => {
-      // SteamOS 3.8+ format: (bIsInitial: boolean, items: { remote_client_id: string, item_data: DownloadItem[] }[])
-      // Old Steam format: (bIsInitial: boolean, items: DownloadItem[])
-      // Somewhat brittle split, but differentiate by checking if the array elements have the item_data property.
-      const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
-      apiFormat.current = detectAPIFormat(arr);
-      const items = extractItems(arr, apiFormat.current);
-      const pending = items.filter((d) => !d.completed);
-      logger.info(`Downloads updated: ${items.length} total, ${pending.length} pending (${items.length - pending.length} completed)`);
-      setDownloads(pending);
-    });
-    return () => reg.unregister();
-  }, []);
-
   const handleDownloadAll = () => {
-    logger.info(`Queue downloads clicked: ${downloads.length} pending downloads, mode: ${settings.mode}`);
-    const candidates = filterByMode(downloads.filter(isUnqueued), settings.mode, settings.maxSizeMB);
+    logger.info(
+      `Queue downloads clicked: ${downloads.length} pending downloads, mode: ${settings.mode}`,
+    );
+    const candidates = filterByMode(
+      downloads.filter(isUnqueued),
+      settings.mode,
+      settings.maxSizeMB,
+    );
     if (candidates.length === 0) {
       toaster.toast({ title: "Download All", body: "No downloads to queue" });
       return;
     }
     const sorted = sortBySize(candidates);
-
     logger.info(`Queueing ${sorted.length} downloads (mode: ${settings.mode})`);
     for (let i = 0; i < sorted.length; i++) {
       const sizeMB = (getTotalBytes(sorted[i]) / (1024 * 1024)).toFixed(1);
-      const name = window.appStore?.GetAppOverviewByAppID(sorted[i].appid)?.display_name ?? sorted[i].appid;
+      const name =
+        (window as any).appStore?.GetAppOverviewByAppID(sorted[i].appid)?.display_name ??
+        sorted[i].appid;
       logger.info(`  [${i + 1}] ${name} (${sorted[i].appid}), size=${sizeMB} MB`);
     }
-
-    // Find the end of the current queue
-    const maxQueueIndex = Math.max(...downloads.map((d) => d.queue_index), -1);
-
-    queueItems(sorted, maxQueueIndex, apiFormat.current);
+    const maxQueueIndex = Math.max(-1, ...downloads.map((d) => d.queue_index));
+    queueItems(sorted, maxQueueIndex, getAPIFormat());
     const resumeAppId = downloads.find((d) => d.queue_index === 0)?.appid ?? sorted[0].appid;
-    resumeAppUpdate(resumeAppId, apiFormat.current);
-
+    resumeAppUpdate(resumeAppId, getAPIFormat());
     toaster.toast({
       title: "Download All",
       body: `Added ${sorted.length} downloads to queue (smallest first)`,
@@ -93,26 +133,39 @@ const PluginContent: FC = () => {
     { label: "Scheduled With Size Limit", data: "size-limit" },
   ];
 
-  // Compute items that will be added to queue based on current mode
-  const getItemsToQueue = () =>
-    filterByMode(downloads.filter(isUnqueued), settings.mode, settings.maxSizeMB);
-
-  const itemsToQueue = getItemsToQueue();
+  const itemsToQueue = filterByMode(
+    downloads.filter(isUnqueued),
+    settings.mode,
+    settings.maxSizeMB,
+  );
   const alreadyQueued = downloads.filter((d) => d.queue_index >= 0).length;
   const ignoredCount = downloads.filter(isUnqueued).length - itemsToQueue.length;
-
-  // Debug: show all downloads' actual data
   const debugInfo = downloads.length > 0 ? JSON.stringify(downloads, null, 1) : "none";
+
+  const renderLastAutoRun = () => {
+    if (!lastAutoRun) return null;
+    const when = new Date(lastAutoRun.time).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const what =
+      lastAutoRun.action === "queued"
+        ? `queued ${lastAutoRun.count} download${lastAutoRun.count !== 1 ? "s" : ""}`
+        : `resumed stalled download`;
+    return (
+      <PanelSectionRow>
+        <span style={{ fontSize: "12px", color: "#8b929a" }}>
+          Last auto-run: {when} — {what}
+        </span>
+      </PanelSectionRow>
+    );
+  };
 
   return (
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem
-            layout="below"
-            onClick={handleDownloadAll}
-            disabled={itemsToQueue.length === 0}
-          >
+          <ButtonItem layout="below" onClick={handleDownloadAll} disabled={itemsToQueue.length === 0}>
             <FaDownload style={{ marginRight: "8px" }} />
             Queue {itemsToQueue.length} Download{itemsToQueue.length !== 1 ? "s" : ""}
           </ButtonItem>
@@ -131,16 +184,12 @@ const PluginContent: FC = () => {
       <PanelSection title="Download Behavior">
         {modeOptions.map((opt) => (
           <PanelSectionRow key={opt.data}>
-            <ButtonItem
-              layout="below"
-              onClick={() => update({ mode: opt.data })}
-            >
+            <ButtonItem layout="below" onClick={() => update({ mode: opt.data })}>
               {settings.mode === opt.data && <FaCheck style={{ marginRight: "8px" }} />}
               {opt.label}
             </ButtonItem>
           </PanelSectionRow>
         ))}
-
         {settings.mode === "size-limit" && (
           <PanelSectionRow>
             <SliderField
@@ -155,22 +204,71 @@ const PluginContent: FC = () => {
         )}
         {DEBUG && (
           <PanelSectionRow>
-            <pre style={{ fontSize: "9px", color: "#8b929a", whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>
+            <pre
+              style={{
+                fontSize: "9px",
+                color: "#8b929a",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                margin: 0,
+              }}
+            >
               {debugInfo}
             </pre>
           </PanelSectionRow>
+        )}
+      </PanelSection>
+
+      <PanelSection title="Auto Download">
+        <PanelSectionRow>
+          <ToggleField
+            label="Automatically queue downloads"
+            checked={settings.autoEnabled}
+            onChange={(v) => update({ autoEnabled: v })}
+          />
+        </PanelSectionRow>
+        {settings.autoEnabled && (
+          <>
+            {modeOptions.map((opt) => (
+              <PanelSectionRow key={`auto-${opt.data}`}>
+                <ButtonItem layout="below" onClick={() => update({ autoMode: opt.data })}>
+                  {settings.autoMode === opt.data && <FaCheck style={{ marginRight: "8px" }} />}
+                  {opt.label}
+                </ButtonItem>
+              </PanelSectionRow>
+            ))}
+            {settings.autoMode === "size-limit" && (
+              <PanelSectionRow>
+                <SliderField
+                  label={`Max Size: ${settings.autoMaxSizeMB} MB`}
+                  value={settings.autoMaxSizeMB}
+                  min={100}
+                  max={10000}
+                  step={100}
+                  onChange={(v) => update({ autoMaxSizeMB: v })}
+                />
+              </PanelSectionRow>
+            )}
+            {renderLastAutoRun()}
+          </>
         )}
       </PanelSection>
     </>
   );
 };
 
-// Plugin entry
+// Plugin entry — runs once per plugin load.
 export default definePlugin(() => {
   logger.info("Download All plugin initialized");
-  return {
+  initPluginRuntime();
+  const def: any = {
     name: "Download All Button",
     content: <PluginContent />,
     icon: <FaDownload />,
+    onDismount: () => {
+      logger.info("Download All plugin unloading");
+      teardownPluginRuntime();
+    },
   };
+  return def;
 });
