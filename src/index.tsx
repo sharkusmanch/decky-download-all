@@ -16,6 +16,7 @@ import {
   type DownloadItem,
   type Mode,
 } from "./download-selection";
+import { loadSettings, saveSettings, type Settings } from "./settings";
 // Set to true to show debug info in the UI
 const DEBUG = false;
 
@@ -23,28 +24,6 @@ enum DownloadAPIFormat {
   Legacy,      // pre-SteamOS 3.8: callback is (unknown, DownloadItem[]), queue methods take only appid
   SteamOS38,  // SteamOS 3.8+: callback is (bIsInitial, { remote_client_id, item_data }[]), queue methods take appid + remote_client_id
 }
-
-interface Settings {
-  mode: Mode;
-  maxSizeMB: number;
-}
-
-const STORAGE_KEY = "download-all-settings";
-const DEFAULTS: Settings = { mode: "scheduled", maxSizeMB: 5000 };
-
-// Load/save settings from localStorage
-const loadSettings = (): Settings => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? { ...DEFAULTS, ...JSON.parse(stored) } : DEFAULTS;
-  } catch {
-    return DEFAULTS;
-  }
-};
-
-const saveSettings = (settings: Settings) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-};
 
 // Shared state
 let currentSettings = loadSettings();
