@@ -8,6 +8,14 @@ import {
 import { useState, useEffect, useRef, FC } from "react";
 import { FaDownload, FaCheck } from "react-icons/fa";
 import { logger } from "./logger";
+import {
+  getTotalBytes,
+  isUnqueued,
+  filterByMode,
+  sortBySize,
+  type DownloadItem,
+  type Mode,
+} from "./download-selection";
 // Set to true to show debug info in the UI
 const DEBUG = false;
 
@@ -15,43 +23,6 @@ enum DownloadAPIFormat {
   Legacy,      // pre-SteamOS 3.8: callback is (unknown, DownloadItem[]), queue methods take only appid
   SteamOS38,  // SteamOS 3.8+: callback is (bIsInitial, { remote_client_id, item_data }[]), queue methods take appid + remote_client_id
 }
-
-// Minimal type for download items (based on actual runtime structure)
-interface ProgressInfo {
-  bytes_total: number;
-  bytes_in_progress: number;
-}
-
-interface UpdateTypeInfo {
-  has_update: boolean;
-  completed_update: boolean;
-  progress?: ProgressInfo[];
-}
-
-interface DownloadItem {
-  appid: number;
-  active: boolean;
-  completed: boolean;
-  paused: boolean;
-  queue_index: number; // -1 if unscheduled, >= 0 if in queue
-  deferred_time: number; // >0 if scheduled for later, 0 if not scheduled
-  update_type_info?: UpdateTypeInfo[];
-}
-
-// Helper to get total bytes from nested structure (only pending updates)
-const getTotalBytes = (d: DownloadItem): number => {
-  let total = 0;
-  for (const info of d.update_type_info || []) {
-    if (info.has_update && !info.completed_update) {
-      for (const prog of info.progress || []) {
-        total += prog.bytes_total || 0;
-      }
-    }
-  }
-  return total;
-};
-
-type Mode = "all" | "scheduled" | "size-limit";
 
 interface Settings {
   mode: Mode;
@@ -115,42 +86,20 @@ const PluginContent: FC = () => {
     return () => reg.unregister();
   }, []);
 
-  // Items not yet in the queue
-  const isUnqueued = (d: DownloadItem) => d.queue_index === -1;
-
-
   const handleDownloadAll = () => {
     logger.info(`Queue downloads clicked: ${downloads.length} pending downloads, mode: ${settings.mode}`);
-    // Start with items NOT in the queue
-    let items = downloads.filter(isUnqueued);
-
-    // Filter based on mode
-    if (settings.mode === "scheduled") {
-      // Only future-scheduled items
-      items = items.filter((d) => d.deferred_time > 0);
-    } else if (settings.mode === "size-limit") {
-      // Future-scheduled items within size limit
-      const maxBytes = settings.maxSizeMB * 1024 * 1024;
-      items = items.filter((d) => d.deferred_time > 0 && getTotalBytes(d) <= maxBytes);
-    }
-    // "all" mode: include all unqueued items (no additional filter)
-
-    if (items.length === 0) {
-      toaster.toast({
-        title: "Download All",
-        body: "No downloads to queue",
-      });
+    const candidates = filterByMode(downloads.filter(isUnqueued), settings.mode, settings.maxSizeMB);
+    if (candidates.length === 0) {
+      toaster.toast({ title: "Download All", body: "No downloads to queue" });
       return;
     }
+    const sorted = sortBySize(candidates);
 
-    // Sort smallest first
-    items.sort((a, b) => getTotalBytes(a) - getTotalBytes(b));
-
-    logger.info(`Queueing ${items.length} downloads (mode: ${settings.mode})`);
-    for (let i = 0; i < items.length; i++) {
-      const sizeMB = (getTotalBytes(items[i]) / (1024 * 1024)).toFixed(1);
-      const name = window.appStore?.GetAppOverviewByAppID(items[i].appid)?.display_name ?? items[i].appid;
-      logger.info(`  [${i + 1}] ${name} (${items[i].appid}), size=${sizeMB} MB`);
+    logger.info(`Queueing ${sorted.length} downloads (mode: ${settings.mode})`);
+    for (let i = 0; i < sorted.length; i++) {
+      const sizeMB = (getTotalBytes(sorted[i]) / (1024 * 1024)).toFixed(1);
+      const name = window.appStore?.GetAppOverviewByAppID(sorted[i].appid)?.display_name ?? sorted[i].appid;
+      logger.info(`  [${i + 1}] ${name} (${sorted[i].appid}), size=${sizeMB} MB`);
     }
 
     // Find the end of the current queue
@@ -162,18 +111,18 @@ const PluginContent: FC = () => {
     logger.info(`QueueAppUpdate.length=${dl.QueueAppUpdate?.length}, SetQueueIndex.length=${dl.SetQueueIndex?.length}, ResumeAppUpdate.length=${dl.ResumeAppUpdate?.length}`);
 
     // Add items to queue, then position them (smallest first at end of existing queue)
-    for (let i = 0; i < items.length; i++) {
+    for (let i = 0; i < sorted.length; i++) {
       if (apiFormat.current === DownloadAPIFormat.SteamOS38) {
-        dl.QueueAppUpdate(items[i].appid, "0");
-        dl.SetQueueIndex(items[i].appid, maxQueueIndex + 1 + i, "0");
+        dl.QueueAppUpdate(sorted[i].appid, "0");
+        dl.SetQueueIndex(sorted[i].appid, maxQueueIndex + 1 + i, "0");
       } else {
-        dl.QueueAppUpdate(items[i].appid);
-        dl.SetQueueIndex(items[i].appid, maxQueueIndex + 1 + i);
+        dl.QueueAppUpdate(sorted[i].appid);
+        dl.SetQueueIndex(sorted[i].appid, maxQueueIndex + 1 + i);
       }
     }
 
     // Resume downloading if paused
-    const resumeAppId = downloads.find((d) => d.queue_index === 0)?.appid ?? items[0].appid;
+    const resumeAppId = downloads.find((d) => d.queue_index === 0)?.appid ?? sorted[0].appid;
     if (apiFormat.current === DownloadAPIFormat.SteamOS38) {
       dl.ResumeAppUpdate(resumeAppId, "0");
     } else {
@@ -182,7 +131,7 @@ const PluginContent: FC = () => {
 
     toaster.toast({
       title: "Download All",
-      body: `Added ${items.length} downloads to queue (smallest first)`,
+      body: `Added ${sorted.length} downloads to queue (smallest first)`,
     });
   };
 
@@ -193,16 +142,8 @@ const PluginContent: FC = () => {
   ];
 
   // Compute items that will be added to queue based on current mode
-  const getItemsToQueue = () => {
-    let items = downloads.filter(isUnqueued);
-    if (settings.mode === "scheduled") {
-      return items.filter((d) => d.deferred_time > 0);
-    } else if (settings.mode === "size-limit") {
-      const maxBytes = settings.maxSizeMB * 1024 * 1024;
-      return items.filter((d) => d.deferred_time > 0 && getTotalBytes(d) <= maxBytes);
-    }
-    return items; // "all" mode
-  };
+  const getItemsToQueue = () =>
+    filterByMode(downloads.filter(isUnqueued), settings.mode, settings.maxSizeMB);
 
   const itemsToQueue = getItemsToQueue();
   const alreadyQueued = downloads.filter((d) => d.queue_index >= 0).length;
