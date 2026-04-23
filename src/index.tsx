@@ -15,7 +15,6 @@ import {
   getTotalBytes,
   isUnqueued,
   sortBySize,
-  type DownloadItem,
   type Mode,
 } from "./download-selection";
 import { loadSettings, saveSettings, type Settings } from "./settings";
