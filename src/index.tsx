@@ -60,8 +60,18 @@ const initPluginRuntime = (): void => {
     setAPIFormat(format);
     const items = extractItems(arr, format);
     const pending = items.filter((d) => !d.completed);
+    const unqueued = pending.filter((d) => d.queue_index === -1).length;
+    const queued = pending.filter((d) => d.queue_index >= 0).length;
+    const active = pending.filter((d) => d.active).length;
+    const paused = pending.filter((d) => d.paused).length;
+    const head = pending.find((d) => d.queue_index === 0);
+    const headDesc = head
+      ? `head[appid=${head.appid} active=${head.active} paused=${head.paused}]`
+      : "head=none";
     logger.info(
-      `Downloads updated: ${items.length} total, ${pending.length} pending (${items.length - pending.length} completed)`,
+      `Downloads updated: ${items.length} total, ${pending.length} pending ` +
+        `(${items.length - pending.length} completed, ${unqueued} unqueued, ${queued} queued, ` +
+        `${active} active, ${paused} paused) ${headDesc}`,
     );
     setCurrentDownloads(pending);
     reactiveTick();
