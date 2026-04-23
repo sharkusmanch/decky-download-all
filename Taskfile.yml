@@ -3,7 +3,7 @@ version: "3"
 vars:
   PLUGIN_NAME: decky-download-all
   DECKY_PLUGINS_DIR: "{{.HOME}}/homebrew/plugins"
-  INSTALL_LINK: "{{.HOME}}/homebrew/plugins/{{.PLUGIN_NAME}}"
+  INSTALL_DIR: "{{.HOME}}/homebrew/plugins/{{.PLUGIN_NAME}}"
   LOG_DIR: "{{.HOME}}/homebrew/logs/{{.PLUGIN_NAME}}"
 
 tasks:
@@ -41,19 +41,36 @@ tasks:
       - rm -rf dist
 
   install:
-    desc: Symlink this repo into Decky's plugins dir (requires sudo)
+    desc: Copy built plugin into Decky's plugins dir (requires sudo)
     deps: [build]
     cmds:
-      - sudo rm -rf {{.INSTALL_LINK}}
-      - sudo ln -s {{.ROOT_DIR}} {{.INSTALL_LINK}}
-      - echo "Symlinked {{.ROOT_DIR}} -> {{.INSTALL_LINK}}"
+      - sudo rm -rf {{.INSTALL_DIR}}
+      - sudo mkdir -p {{.INSTALL_DIR}}
+      - |
+        sudo rsync -a \
+          --exclude='/.git' \
+          --exclude='/.github' \
+          --exclude='/.vscode' \
+          --exclude='/.claude' \
+          --exclude='/src' \
+          --exclude='/tests' \
+          --exclude='/node_modules' \
+          --exclude='/docs' \
+          --exclude='/Taskfile.yml' \
+          --exclude='/rollup.config.js' \
+          --exclude='/tsconfig.json' \
+          --exclude='/pnpm-lock.yaml' \
+          --exclude='/decky.pyi' \
+          --exclude='/.gitignore' \
+          {{.ROOT_DIR}}/ {{.INSTALL_DIR}}/
+      - echo "Copied plugin to {{.INSTALL_DIR}}"
       - echo "Run 'task reload' to make Decky pick up the change."
 
   uninstall:
-    desc: Remove the plugin symlink (requires sudo)
+    desc: Remove the installed plugin directory (requires sudo)
     cmds:
-      - sudo rm -f {{.INSTALL_LINK}}
-      - echo "Removed {{.INSTALL_LINK}}"
+      - sudo rm -rf {{.INSTALL_DIR}}
+      - echo "Removed {{.INSTALL_DIR}}"
 
   reload:
     desc: Restart the Decky Loader service (requires sudo)
