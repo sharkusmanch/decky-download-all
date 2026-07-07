@@ -50,3 +50,30 @@ export function parseDownloadItems(args: any[]): { items: DownloadItem[]; format
   }
   return { items: arr as DownloadItem[], format: "legacy" };
 }
+
+export interface QueuePlan {
+  ops: { appid: number; index: number }[];
+  resumeAppId: number | null;
+}
+
+const isUnqueued = (d: DownloadItem) => d.queue_index === -1;
+
+// Which unqueued downloads to enqueue, given the mode, smallest first.
+export function selectItemsToQueue(downloads: DownloadItem[], settings: Settings): DownloadItem[] {
+  let items = downloads.filter(isUnqueued);
+  if (settings.mode === "scheduled") {
+    items = items.filter((d) => d.deferred_time > 0);
+  } else if (settings.mode === "size-limit") {
+    const maxBytes = settings.maxSizeMB * 1024 * 1024;
+    items = items.filter((d) => d.deferred_time > 0 && getTotalBytes(d) <= maxBytes);
+  }
+  return [...items].sort((a, b) => getTotalBytes(a) - getTotalBytes(b));
+}
+
+// Queue positions (append below the existing queue) and which appid to resume.
+export function planQueueOps(items: DownloadItem[], downloads: DownloadItem[]): QueuePlan {
+  const maxQueueIndex = downloads.reduce((m, d) => Math.max(m, d.queue_index), -1);
+  const ops = items.map((it, i) => ({ appid: it.appid, index: maxQueueIndex + 1 + i }));
+  const resumeAppId = downloads.find((d) => d.queue_index === 0)?.appid ?? items[0]?.appid ?? null;
+  return { ops, resumeAppId };
+}
