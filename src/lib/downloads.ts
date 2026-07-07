@@ -39,3 +39,14 @@ export const getTotalBytes = (d: DownloadItem): number => {
   }
   return total;
 };
+
+// The RegisterForDownloadItems callback shape changed in SteamOS 3.8. Detect by
+// checking whether array elements carry `item_data` (the 3.8 per-client wrapper).
+export function parseDownloadItems(args: any[]): { items: DownloadItem[]; format: ApiFormat } {
+  const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
+  if (arr.length > 0 && arr[0].item_data !== undefined) {
+    const local = arr.find((e) => e.remote_client_id === "0"); // "0" = this machine
+    return { items: (local?.item_data ?? []) as DownloadItem[], format: "steamos38" };
+  }
+  return { items: arr as DownloadItem[], format: "legacy" };
+}

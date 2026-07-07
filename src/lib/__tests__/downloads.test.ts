@@ -30,3 +30,35 @@ describe("DEFAULTS", () => {
     expect(DEFAULTS.mode).toBe("scheduled");
   });
 });
+
+import { parseDownloadItems } from "../downloads";
+
+describe("parseDownloadItems", () => {
+  const a = item({ appid: 1 }), b = item({ appid: 2 });
+
+  it("legacy: items array in args[1]", () => {
+    const r = parseDownloadItems([true, [a, b]]);
+    expect(r.format).toBe("legacy");
+    expect(r.items.map(i => i.appid)).toEqual([1, 2]);
+  });
+
+  it("steamos38: picks the local machine (remote_client_id '0')", () => {
+    const r = parseDownloadItems([true, [
+      { remote_client_id: "0", item_data: [a] },
+      { remote_client_id: "99", item_data: [b] },
+    ]]);
+    expect(r.format).toBe("steamos38");
+    expect(r.items.map(i => i.appid)).toEqual([1]);
+  });
+
+  it("steamos38 with no local entry → empty", () => {
+    const r = parseDownloadItems([true, [{ remote_client_id: "7", item_data: [a] }]]);
+    expect(r.format).toBe("steamos38");
+    expect(r.items).toEqual([]);
+  });
+
+  it("degenerate args → legacy empty", () => {
+    expect(parseDownloadItems([]).items).toEqual([]);
+    expect(parseDownloadItems([true, null]).items).toEqual([]);
+  });
+});
