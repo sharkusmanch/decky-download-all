@@ -1,11 +1,14 @@
 {
-  "name": "Download All",
+  "name": "Download All+",
   "author": "ben.temple",
   "flags": [],
   "api_version": 1,
   "publish": {
-    "tags": ["downloads", "queue"],
-    "description": "Download All - A plugin that let's the user immediately queue all scheduled downloads to immediately download.",
+    "tags": [
+      "downloads",
+      "queue"
+    ],
+    "description": "Download All+ \u2014 fork of Download All with auto-queue on a timer. Queues scheduled downloads immediately, manually or automatically.",
     "image": "https://raw.githubusercontent.com/bentemple/decky-download-all/main/assets/preview.png"
   }
 }

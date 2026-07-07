@@ -92,10 +92,10 @@ const PluginContent: FC = () => {
 };
 
 export default definePlugin(() => {
-  logger.info("Download All plugin initialized");
+  logger.info("Download All+ plugin initialized");
   controller.init();
   return {
-    name: "Download All Button",
+    name: "Download All+",
     content: <PluginContent />,
     icon: <FaDownload />,
     onDismount() { controller.dispose(); },
