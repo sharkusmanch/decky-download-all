@@ -58,9 +58,17 @@ export interface QueuePlan {
 
 const isUnqueued = (d: DownloadItem) => d.queue_index === -1;
 
+// An item is queueable only if it has a pending update. Items can linger in the
+// download list with every update_type_info entry inactive (e.g. a game installed
+// on another machine) — QueueAppUpdate silently no-ops on those, so selecting them
+// re-"queues" phantoms forever. Items without update_type_info (legacy clients)
+// can't be judged, so they're kept.
+export const hasPendingUpdate = (d: DownloadItem): boolean =>
+  !d.update_type_info?.length || d.update_type_info.some((i) => i.has_update && !i.completed_update);
+
 // Which unqueued downloads to enqueue, given the mode, smallest first.
 export function selectItemsToQueue(downloads: DownloadItem[], settings: Settings): DownloadItem[] {
-  let items = downloads.filter(isUnqueued);
+  let items = downloads.filter(isUnqueued).filter(hasPendingUpdate);
   if (settings.mode === "scheduled") {
     items = items.filter((d) => d.deferred_time > 0);
   } else if (settings.mode === "size-limit") {
@@ -68,6 +76,23 @@ export function selectItemsToQueue(downloads: DownloadItem[], settings: Settings
     items = items.filter((d) => d.deferred_time > 0 && getTotalBytes(d) <= maxBytes);
   }
   return [...items].sort((a, b) => getTotalBytes(a) - getTotalBytes(b));
+}
+
+export interface QueueVerification { confirmed: number[]; missing: number[] }
+
+// After queueing, check which appids Steam actually accepted. An appid still
+// present with queue_index === -1 was NOT queued; one with queue_index >= 0 was.
+// An appid absent from the fresh list is counted confirmed — it's no longer a
+// pending download (started/finished), which queueing can cause but ignoring can't.
+export function verifyQueued(appids: number[], downloads: DownloadItem[]): QueueVerification {
+  const byId = new Map(downloads.map((d) => [d.appid, d]));
+  const confirmed: number[] = [];
+  const missing: number[] = [];
+  for (const appid of appids) {
+    const d = byId.get(appid);
+    (d && d.queue_index === -1 ? missing : confirmed).push(appid);
+  }
+  return { confirmed, missing };
 }
 
 // Queue positions (append below the existing queue) and which appid to resume.

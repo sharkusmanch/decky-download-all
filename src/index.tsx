@@ -31,7 +31,7 @@ const PluginContent: FC = () => {
     <>
       <PanelSection>
         <PanelSectionRow>
-          <ButtonItem layout="below" onClick={() => controller.runQueue({ silent: false })}
+          <ButtonItem layout="below" onClick={() => { controller.runQueue({ silent: false }).catch((e) => logger.error(`queue failed: ${e}`)); }}
             disabled={itemsToQueue.length === 0}>
             <FaDownload style={{ marginRight: "8px" }} />
             Queue {itemsToQueue.length} Download{itemsToQueue.length !== 1 ? "s" : ""}

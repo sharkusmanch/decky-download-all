@@ -91,6 +91,41 @@ describe("selectItemsToQueue", () => {
   });
 });
 
+import { verifyQueued, hasPendingUpdate } from "../downloads";
+
+describe("hasPendingUpdate / phantom filtering", () => {
+  it("excludes items whose update_type_info has no pending update", () => {
+    const phantom = item({ appid: 9, update_type_info: [
+      { has_update: false, completed_update: false },
+      { has_update: true, completed_update: true },
+    ] });
+    expect(hasPendingUpdate(phantom)).toBe(false);
+    expect(selectItemsToQueue([phantom], settings({ mode: "all" }))).toEqual([]);
+  });
+  it("keeps items with a pending update or no update info", () => {
+    expect(hasPendingUpdate(sized(1, {}, 100))).toBe(true);
+    expect(hasPendingUpdate(item({ update_type_info: undefined }))).toBe(true);
+    expect(hasPendingUpdate(item({ update_type_info: [] }))).toBe(true);
+  });
+});
+
+describe("verifyQueued", () => {
+  it("confirms appids that moved into the queue, flags ones still at -1", () => {
+    const dl = [item({ appid: 1, queue_index: 3 }), item({ appid: 2, queue_index: -1 })];
+    expect(verifyQueued([1, 2], dl)).toEqual({ confirmed: [1], missing: [2] });
+  });
+  it("counts appids absent from the fresh list as confirmed", () => {
+    expect(verifyQueued([5], [])).toEqual({ confirmed: [5], missing: [] });
+    expect(verifyQueued([5], [item({ appid: 1, queue_index: -1 })])).toEqual({ confirmed: [5], missing: [] });
+  });
+  it("queue head (index 0) counts as confirmed", () => {
+    expect(verifyQueued([1], [item({ appid: 1, queue_index: 0 })])).toEqual({ confirmed: [1], missing: [] });
+  });
+  it("empty appids → nothing to report", () => {
+    expect(verifyQueued([], [item({ appid: 1 })])).toEqual({ confirmed: [], missing: [] });
+  });
+});
+
 describe("planQueueOps", () => {
   it("appends below the current max queue index; resumes head or first item", () => {
     const items = [sized(2, {}, 100), sized(3, {}, 200)];
