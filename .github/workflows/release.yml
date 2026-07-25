@@ -29,12 +29,12 @@ jobs:
       - name: List downloaded files
         run: ls -lh ./artifacts/
 
-      - name: Create Draft Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: ./artifacts/*.zip
           generate_release_notes: true
-          draft: true
+          draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
