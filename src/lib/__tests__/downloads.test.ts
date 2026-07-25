@@ -39,7 +39,7 @@ describe("parseDownloadItems", () => {
   it("legacy: items array in args[1]", () => {
     const r = parseDownloadItems([true, [a, b]]);
     expect(r.format).toBe("legacy");
-    expect(r.items.map(i => i.appid)).toEqual([1, 2]);
+    expect(r.items!.map(i => i.appid)).toEqual([1, 2]);
   });
 
   it("steamos38: picks the local machine (remote_client_id '0')", () => {
@@ -48,12 +48,20 @@ describe("parseDownloadItems", () => {
       { remote_client_id: "99", item_data: [b] },
     ]]);
     expect(r.format).toBe("steamos38");
-    expect(r.items.map(i => i.appid)).toEqual([1]);
+    expect(r.items!.map(i => i.appid)).toEqual([1]);
   });
 
-  it("steamos38 with no local entry → empty", () => {
+  // A delta about a remote client carries no local wrapper. Reporting [] there
+  // would wipe the tracked downloads and leave the plugin blind until Steam next
+  // mentions the local client, which it may not do for hours.
+  it("steamos38 with no local entry → null (no news, not 'no downloads')", () => {
     const r = parseDownloadItems([true, [{ remote_client_id: "7", item_data: [a] }]]);
     expect(r.format).toBe("steamos38");
+    expect(r.items).toBeNull();
+  });
+
+  it("steamos38 with an empty local entry → empty list (genuinely nothing)", () => {
+    const r = parseDownloadItems([true, [{ remote_client_id: "0", item_data: [] }]]);
     expect(r.items).toEqual([]);
   });
 

@@ -15,6 +15,10 @@ export interface DownloadItem {
 export type ApiFormat = "legacy" | "steamos38";
 export type Mode = "all" | "scheduled" | "size-limit";
 
+// Steam identifies the local machine as remote client "0" (matches
+// `downloadsStore.m_ulRemoteClientID`, and what Steam's own UI passes).
+export const LOCAL_CLIENT_ID = "0";
+
 export interface Settings {
   mode: Mode;
   maxSizeMB: number;
@@ -42,11 +46,18 @@ export const getTotalBytes = (d: DownloadItem): number => {
 
 // The RegisterForDownloadItems callback shape changed in SteamOS 3.8. Detect by
 // checking whether array elements carry `item_data` (the 3.8 per-client wrapper).
-export function parseDownloadItems(args: any[]): { items: DownloadItem[]; format: ApiFormat } {
+//
+// `items` is null when the payload says nothing about the local machine. Steam
+// sends per-client deltas: an event caused by a *remote* client (another PC or a
+// Deck on the account) carries only that client's wrapper, with no entry for the
+// local one. That is "no news about us", not "we have no downloads" — treating it
+// as an empty list wipes the tracked downloads, and since Steam emits nothing at
+// all while downloads are idle, the plugin then stays blind for hours.
+export function parseDownloadItems(args: any[]): { items: DownloadItem[] | null; format: ApiFormat } {
   const arr: any[] = Array.isArray(args[1]) ? args[1] : Array.isArray(args[0]) ? args[0] : [];
   if (arr.length > 0 && arr[0].item_data !== undefined) {
-    const local = arr.find((e) => e.remote_client_id === "0"); // "0" = this machine
-    return { items: (local?.item_data ?? []) as DownloadItem[], format: "steamos38" };
+    const local = arr.find((e) => e.remote_client_id === LOCAL_CLIENT_ID);
+    return { items: local ? (local.item_data as DownloadItem[]) : null, format: "steamos38" };
   }
   return { items: arr as DownloadItem[], format: "legacy" };
 }

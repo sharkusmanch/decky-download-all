@@ -148,6 +148,8 @@ export function init() {
   reg = SteamClient.Downloads.RegisterForDownloadItems((...args: any[]) => {
     const parsed = parseDownloadItems(args);
     format = parsed.format;
+    // null = this delta was about another machine only; keep what we already know.
+    if (parsed.items === null) return;
     downloads = parsed.items.filter((d) => !d.completed);
     snapshotGen++;
     finishVerify(true); // early-confirm a pending verification if all appids now queued
